@@ -1,0 +1,53 @@
+# ============================================================
+# BlueFish AI Backend - Python Dependencies
+# Target: Render.com (8GB RAM instance)
+# Python: 3.10+
+# ============================================================
+
+# ── Core Framework ────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# ── Authentication (JWT Verification) ────────────────────────
+python-jose[cryptography]==3.3.0    # Supabase JWT verification (HS256)
+PyJWT==2.8.0                        # For Mock Auth in development
+
+# ── Distributed Task Queue ────────────────────────────────────
+celery==5.4.0
+celery[redis]==5.4.0                # Redis broker + result backend
+flower==2.0.1                       # Celery monitoring dashboard (optional)
+
+# ── Supabase ──────────────────────────────────────────────────
+# Let supabase manage its own internal postgrest/realtime versions
+supabase==2.5.1
+
+# ── Redis ─────────────────────────────────────────────────────
+redis==5.0.7
+
+# ── AI / ML Core ─────────────────────────────────────────────
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.4.2
+xgboost==2.0.3
+onnxruntime==1.18.1
+
+# ── PyTorch (CPU-only for Render.com) ────────────────────────
+# CRITICAL FIX: Use --extra-index-url so pip can still find FastAPI/Supabase
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.1
+
+# ── Data Processing ───────────────────────────────────────────
+pandas==2.2.2
+xarray==2024.6.0
+netCDF4==1.7.1.post1
+
+# ── Geospatial & Image Math ───────────────────────────────────
+scikit-image==0.23.2
+
+# ── Background Scheduling ────────────────────────────────────
+apscheduler==3.10.4
+
+# ── HTTP / Async ─────────────────────────────────────────────
+httpx==0.27.0
