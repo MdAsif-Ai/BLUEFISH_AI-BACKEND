@@ -109,6 +109,9 @@ async def cache_set(key: str, value: Any, ttl_seconds: Optional[int] = None) -> 
         return False
 
 
+_in_memory_cache: dict[str, str] = {}
+
+
 def cache_get_sync(key: str) -> Optional[Any]:
     try:
         r = get_redis_sync()
@@ -117,20 +120,23 @@ def cache_get_sync(key: str) -> Optional[Any]:
             return None
         return json.loads(raw)
     except Exception as e:
-        logger.warning(f"cache_get_sync failed key={key}: {e}")
-        return None
+        logger.debug(f"Redis cache_get_sync fallback key={key}: {e}")
+        raw = _in_memory_cache.get(key)
+        return json.loads(raw) if raw else None
 
 
 def cache_set_sync(key: str, value: Any, ttl_seconds: Optional[int] = None) -> bool:
+    val_str = json.dumps(value, default=str)
+    _in_memory_cache[key] = val_str
     try:
         settings = get_settings()
         ttl = ttl_seconds or settings.REDIS_CACHE_TTL_SECONDS
         r = get_redis_sync()
-        r.setex(key, ttl, json.dumps(value, default=str))
+        r.setex(key, ttl, val_str)
         return True
     except Exception as e:
-        logger.warning(f"cache_set_sync failed key={key}: {e}")
-        return False
+        logger.debug(f"Redis cache_set_sync fallback key={key}: {e}")
+        return True
 
 
 # ── Pub/Sub Publisher (Safety Alerts) ────────────────────────────────────────

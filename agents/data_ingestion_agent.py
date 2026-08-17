@@ -219,7 +219,7 @@ def generate_and_cache_pfz_map(filepath: str, date_str: str, pfz_service: Option
         r.set(legacy_key, json.dumps(geojson_map))
         logger.info(f"Direct Redis SET executed for key: {redis_key}")
     except Exception as e:
-        logger.warning(f"Direct Redis SET fallback warning: {e}")
+        logger.debug(f"Direct Redis SET fallback: {e}")
 
     logger.info(f"PFZ GeoJSON map generated and stored in Redis under '{redis_key}'. Feature count: {len(geojson_map['features'])}")
 
