@@ -1,0 +1,48 @@
+# Render manifest for BlueFish AI Backend (helpers only)
+# Fill `repo` or let Render infer from UI when creating the service.
+# Note: Replace <YOUR_REPO> and <YOUR_RENDER_SERVICE_NAME> where applicable.
+
+services:
+  - name: bluefish-backend
+    type: web
+    env: python
+    branch: main
+    # Optional: explicit build command
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1"
+    # plan: specify in UI (choose 8GB instance)
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SUPABASE_URL
+        value: ""
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        value: ""
+      - key: SUPABASE_JWT_SECRET
+        value: ""
+      - key: REDIS_URL
+        value: ""
+
+  - name: bluefish-celery-worker
+    type: background
+    env: python
+    branch: main
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A celery_worker.celery_app worker --loglevel=info"
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: REDIS_URL
+        value: ""
+
+  - name: bluefish-celery-beat
+    type: background
+    env: python
+    branch: main
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A celery_worker.celery_app beat --loglevel=info"
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: REDIS_URL
+        value: ""
