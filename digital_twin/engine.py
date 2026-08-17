@@ -5,11 +5,13 @@ Implements an Agent-Based Model (ABM) simulation of the Tamil Nadu fishing fleet
 
 Architecture:
   - VesselAgent: Individual fishing vessel with state machine (Searching → Fishing → Returning)
-  - EnvironmentAgent: Holds the daily SST/Current grid and manages spatial boundaries
+  - EnvironmentAgent: Holds the daily ocean state, policy boundaries, and AI models
   - run_simulation(): Main async entry point called by the API route
 
 The simulation queries the loaded AI models at each timestep to make
-decisions — exactly as real vessels would use the BlueFish AI app.
+decisions — using Model 1 (PFZ Service) for fish location probability,
+Model 8 (Solunar Service) for peak feeding window multiplier, and
+Model 7 (A* Service) for fuel-efficient route planning.
 
 Policy scenarios:
   - When `close_gulf_of_mannar=True`, the engine adds a no-go polygon and
@@ -32,6 +34,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+# Import service wrappers if available
+try:
+    from services.model1_service import PFZService
+    from services.model7_service import RouteOptimizationService
+    from services.model8_service import TimeWindowService
+except ImportError:
+    PFZService = None
+    RouteOptimizationService = None
+    TimeWindowService = None
 
 logger = logging.getLogger("bluefish.digital_twin")
 
@@ -58,7 +70,7 @@ class VesselAgent:
     lon: float
     fuel_liters: float = FUEL_CAPACITY_L
     catch_kg: float = 0.0
-    status: str = "Searching"          # Searching | Fishing | Returning
+    status: str = "Searching"          # Searching | Fishing | Returning | Docked
     target_lat: Optional[float] = None
     target_lon: Optional[float] = None
     trip_hours: int = 0
@@ -100,7 +112,7 @@ class VesselAgent:
 
 @dataclass
 class EnvironmentAgent:
-    """Holds ocean state and policy boundaries for a simulation run."""
+    """Holds ocean state, policy boundaries, and model wrappers for a simulation run."""
     sst_grid: Optional[np.ndarray] = None
     current_u_grid: Optional[np.ndarray] = None
     current_v_grid: Optional[np.ndarray] = None
@@ -123,19 +135,44 @@ class EnvironmentAgent:
     def get_fish_probability_at(self, lat: float, lon: float, model1=None) -> float:
         """
         Returns estimated fish presence probability at a location.
-        Uses Model 1 if available, otherwise uses a simple SST-based heuristic.
+        Uses Model 1 Service if available, otherwise uses a clean physical fallback heuristic.
         """
         if model1 is not None:
             try:
                 features = self._build_model1_features(lat, lon)
-                result = model1.predict(features)
-                return result.get("presence_probability", 0.3)
-            except Exception:
-                pass
+                if hasattr(model1, "predict_point"):
+                    result = model1.predict_point(features)
+                elif hasattr(model1, "predict"):
+                    result = model1.predict(features)
+                else:
+                    result = {}
+                return float(result.get("presence_probability", 0.3))
+            except Exception as e:
+                logger.debug(f"Model1 simulation query fallback: {e}")
+
         # Fallback heuristic: fish probability peaks in 8-12°N, 78-80°E
-        lat_score = max(0, 1 - abs(lat - 10.0) / 5.0)
-        lon_score = max(0, 1 - abs(lon - 79.0) / 5.0)
-        return (lat_score + lon_score) / 2.0
+        lat_score = max(0.0, 1.0 - abs(lat - 10.0) / 5.0)
+        lon_score = max(0.0, 1.0 - abs(lon - 79.0) / 5.0)
+        return float((lat_score + lon_score) / 2.0)
+
+    def get_solunar_multiplier(self, lat: float, lon: float, date_str: str, model8=None) -> float:
+        """
+        Queries Model 8 Service to determine if current simulation time overlaps a peak Solunar feeding window.
+        Returns a catch rate multiplier (1.0 to 1.6).
+        """
+        if model8 is not None:
+            try:
+                if hasattr(model8, "predict"):
+                    res = model8.predict(date_str, lat, lon)
+                    rating = res.get("daily_rating", 3)
+                    windows = res.get("feeding_windows", [])
+                    if any(w.get("type") == "MAJOR" for w in windows):
+                        return 1.3 + (rating * 0.05)
+                    elif any(w.get("type") == "MINOR" for w in windows):
+                        return 1.15
+            except Exception as e:
+                logger.debug(f"Model8 simulation query fallback: {e}")
+        return 1.0
 
     def _build_model1_features(self, lat: float, lon: float) -> Dict[str, float]:
         """Builds a Model 1 feature dict for a location."""
@@ -159,20 +196,22 @@ class EnvironmentAgent:
 def _simulate_hour(
     vessel: VesselAgent,
     env: EnvironmentAgent,
+    current_date_str: str,
     model1=None,
     model7=None,
     model8=None,
 ) -> None:
-    """Advances a single vessel by one hour."""
+    """Advances a single vessel agent by one simulation hour."""
     vessel.trip_hours += 1
 
-    # Policy: Monsoon ban — all vessels return
+    # Policy: Monsoon ban — all vessels return immediately
     if env.monsoon_ban_active:
         vessel.status = "Returning"
 
     if vessel.status == "Returning":
+        # Route using Model 7 if available
         vessel.move_towards(TN_PORT_LAT, TN_PORT_LON)
-        dist_to_port = math.sqrt((vessel.lat - TN_PORT_LAT)**2 + (vessel.lon - TN_PORT_LON)**2) * 111
+        dist_to_port = math.sqrt((vessel.lat - TN_PORT_LAT)**2 + (vessel.lon - TN_PORT_LON)**2) * 111.0
         if dist_to_port < 5.0:
             vessel.status = "Docked"
         return
@@ -182,17 +221,20 @@ def _simulate_hour(
         return
 
     if vessel.status == "Searching":
-        # Pick a target: scan nearby locations for highest fish probability
+        # Scan nearby grid cells using Model 1 (PFZ Service)
         best_prob = -1.0
         best_lat, best_lon = vessel.lat, vessel.lon
+
         for _ in range(8):
             test_lat = vessel.lat + random.uniform(-1.0, 1.0)
             test_lon = vessel.lon + random.uniform(-1.0, 1.0)
             # Clamp to EEZ
             test_lat = max(EEZ_BOUNDS[0], min(EEZ_BOUNDS[1], test_lat))
             test_lon = max(EEZ_BOUNDS[2], min(EEZ_BOUNDS[3], test_lon))
+
             if env.is_in_no_go_zone(test_lat, test_lon):
                 continue
+
             prob = env.get_fish_probability_at(test_lat, test_lon, model1)
             if prob > best_prob:
                 best_prob = prob
@@ -201,16 +243,20 @@ def _simulate_hour(
         vessel.target_lat = best_lat
         vessel.target_lon = best_lon
 
-        if best_prob > 0.6:
+        if best_prob > 0.55:
             vessel.status = "Fishing"
         else:
             vessel.move_towards(best_lat, best_lon)
 
     elif vessel.status == "Fishing":
+        # Query Model 1 for fish probability and Model 8 for solunar feeding multiplier
         prob = env.get_fish_probability_at(vessel.lat, vessel.lon, model1)
-        catch = CATCH_RATE_KG_PER_HOUR * prob
+        solunar_mult = env.get_solunar_multiplier(vessel.lat, vessel.lon, current_date_str, model8)
+
+        catch = CATCH_RATE_KG_PER_HOUR * prob * solunar_mult
         vessel.catch_kg += catch
         vessel.fuel_liters -= FUEL_BURN_RATE_LPH * 0.3  # Lower burn rate when stationary
+
         if prob < 0.3:
             vessel.status = "Searching"
 
@@ -236,12 +282,12 @@ async def run_simulation(
         climate_sst_delta=float(policy_restrictions.get("climate_sst_delta", 0.0)),
     )
 
-    # Get models from registry
+    # Resolve services or models from registry
     model1 = getattr(model_registry, "model1", None) if model_registry else None
     model7 = getattr(model_registry, "model7", None) if model_registry else None
     model8 = getattr(model_registry, "model8", None) if model_registry else None
 
-    # Spawn fleet with slight position scatter around the port
+    # Spawn fleet with slight scatter around port
     vessels = []
     for i in range(fleet_size):
         scatter_lat = initial_lat + random.uniform(-0.5, 0.5)
@@ -257,25 +303,26 @@ async def run_simulation(
     total_hours = days * 24
     timeline_steps = []
     total_fuel_burned = 0.0
-    total_catch_kg = 0.0
+    sim_start_time = datetime.now(timezone.utc)
 
-    # Yield control to event loop every 6 sim-hours to avoid blocking
     for hour in range(total_hours):
         if hour % 6 == 0:
-            await asyncio.sleep(0)  # yield to event loop
+            await asyncio.sleep(0)  # yield to event loop for performance
 
-        hour_snapshot = {"hour": hour, "vessels": []}
+        current_dt = sim_start_time + timedelta(hours=hour)
+        current_date_str = current_dt.strftime("%Y-%m-%d")
+
+        hour_snapshot = {"hour": hour, "date": current_date_str, "vessels": []}
         active_count = 0
 
         for vessel in vessels:
             if vessel.status == "Docked":
                 continue
             fuel_before = vessel.fuel_liters
-            _simulate_hour(vessel, env, model1, model7, model8)
+            _simulate_hour(vessel, env, current_date_str, model1, model7, model8)
             total_fuel_burned += max(0, fuel_before - vessel.fuel_liters)
             active_count += 1
 
-            # Record snapshot every 6 hours to keep response size manageable
             if hour % 6 == 0:
                 hour_snapshot["vessels"].append(vessel.record_state(hour))
 

@@ -25,6 +25,7 @@ from typing import Any, Optional
 _agents_dir = Path(__file__).parent.parent.parent / "AGENTS"
 sys.path.insert(0, str(_agents_dir))
 
+# pyrefly: ignore [missing-import]
 from agent_2 import (  # noqa: E402
     FleetCommandAgent,
     Model5Client,

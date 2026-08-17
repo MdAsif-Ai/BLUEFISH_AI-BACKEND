@@ -12,14 +12,14 @@ Feature contract (order MUST match ONNX training pipeline):
 
 Usage:
     service = PFZService(model_registry.model1)
-    result = service.predict_point(features_dict)
+    result = service.predict(features_dict)
     grid_result = service.predict_grid(grid_df)
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -41,32 +41,35 @@ class PFZService:
       - stage2_intensity.onnx
     """
 
-    def __init__(self, model_tuple):
+    def __init__(self, model_tuple: Any):
         """
         Args:
-            model_tuple: A tuple (stage1_session, stage2_session) of
-                         onnxruntime.InferenceSession objects.
+            model_tuple: Can be:
+                - A tuple/list (stage1_session, stage2_session) of ort.InferenceSession objects
+                - A Model1Client instance (from agents.advisory_agent)
+                - A single ort.InferenceSession
         """
-        if isinstance(model_tuple, (tuple, list)) and len(model_tuple) == 2:
+        if hasattr(model_tuple, "stage1_session"):
+            self.stage1_session = model_tuple.stage1_session
+            self.stage2_session = getattr(model_tuple, "stage2_session", None)
+        elif isinstance(model_tuple, (tuple, list)) and len(model_tuple) == 2:
             self.stage1_session, self.stage2_session = model_tuple
         else:
-            # Legacy: single model passed
             self.stage1_session = model_tuple
             self.stage2_session = None
 
-        # Cache input name lookups (avoid repeated .get_inputs() calls)
         self._s1_input_name: Optional[str] = None
         self._s2_input_name: Optional[str] = None
 
     @property
     def _stage1_input_name(self) -> str:
-        if self._s1_input_name is None:
+        if self._s1_input_name is None and self.stage1_session is not None:
             self._s1_input_name = self.stage1_session.get_inputs()[0].name
-        return self._s1_input_name
+        return self._s1_input_name or "input"
 
     @property
     def _stage2_input_name(self) -> str:
-        if self._s2_input_name is None and self.stage2_session:
+        if self._s2_input_name is None and self.stage2_session is not None:
             self._s2_input_name = self.stage2_session.get_inputs()[0].name
         return self._s2_input_name or "input"
 
@@ -95,27 +98,44 @@ class PFZService:
                 "zone_class": "HIGH" | "MEDIUM" | "LOW" | "ABSENT",
             }
         """
+        if self.stage1_session is None:
+            # Fallback if sessions failed to load
+            return {
+                "presence_probability": 0.5,
+                "intensity_score": 0.5,
+                "zone_class": "MEDIUM",
+                "degraded": True,
+            }
+
         X = self._build_feature_array(features)
 
         # Stage 1: Presence probability
         s1_output = self.stage1_session.run(None, {self._stage1_input_name: X})
-        # ONNX classifiers output [labels, probabilities]; take class-1 probability
         if isinstance(s1_output, (list, tuple)) and len(s1_output) > 1:
-            proba = float(s1_output[1][0][1])   # prob of class=1
+            raw_prob = s1_output[1]
+            if isinstance(raw_prob, (list, np.ndarray)) and len(raw_prob) > 0:
+                if isinstance(raw_prob[0], dict):
+                    proba = float(raw_prob[0].get(1, 0.5))
+                else:
+                    proba = float(np.asarray(raw_prob).flatten()[-1])
+            else:
+                proba = 0.5
         else:
-            proba = float(s1_output[0][0])
+            proba = float(np.asarray(s1_output[0]).flatten()[-1])
 
-        # Stage 2: Intensity score (only meaningful if presence detected)
+        proba = float(np.clip(proba, 0.0, 1.0))
+
+        # Stage 2: Intensity score
         intensity = 0.0
         if self.stage2_session is not None and proba > 0.4:
             try:
                 s2_output = self.stage2_session.run(None, {self._stage2_input_name: X})
-                intensity = float(np.clip(s2_output[0][0], 0.0, 1.0))
+                raw_s2 = float(np.asarray(s2_output[0]).flatten()[0])
+                intensity = float(np.clip(raw_s2, 0.0, 1.0))
             except Exception as e:
                 logger.warning(f"Stage 2 intensity inference failed: {e}")
-                intensity = proba  # fallback: use presence prob as intensity
+                intensity = proba
 
-        # Zone classification
         if proba < 0.3:
             zone_class = "ABSENT"
         elif proba < 0.55:
@@ -131,18 +151,30 @@ class PFZService:
             "zone_class": zone_class,
         }
 
+    def predict(self, features: Dict[str, float]) -> Dict[str, Any]:
+        """Alias for predict_point for unified interface."""
+        return self.predict_point(features)
+
     def predict_grid(self, grid_data: List[Dict[str, float]]) -> List[Dict[str, Any]]:
         """
         Batch prediction over a list of grid points.
-        Each item in grid_data must include lat, lon, and all 10 feature keys.
-
-        Returns a list of dicts with lat, lon, and the prediction fields.
-        Optimized: builds the full feature matrix once and runs a single ONNX call.
+        Each item in grid_data must include lat, lon, and the feature keys.
         """
         if not grid_data:
             return []
 
-        # Build full matrix for batch inference
+        if self.stage1_session is None:
+            results = []
+            for row in grid_data:
+                results.append({
+                    "lat": row.get("lat", 0.0),
+                    "lon": row.get("lon", 0.0),
+                    "presence_probability": 0.5,
+                    "intensity_score": 0.5,
+                    "zone_class": "MEDIUM",
+                })
+            return results
+
         X = np.array(
             [[float(row.get(k, 0.0)) for k in FEATURE_ORDER] for row in grid_data],
             dtype=np.float32,
@@ -151,27 +183,31 @@ class PFZService:
         try:
             s1_output = self.stage1_session.run(None, {self._stage1_input_name: X})
             if isinstance(s1_output, (list, tuple)) and len(s1_output) > 1:
-                probas = s1_output[1][:, 1]  # class-1 proba column
+                raw_prob = s1_output[1]
+                if isinstance(raw_prob, np.ndarray) and raw_prob.ndim == 2 and raw_prob.shape[1] > 1:
+                    probas = raw_prob[:, 1]
+                else:
+                    probas = np.asarray(s1_output[0]).flatten()
             else:
-                probas = s1_output[0].flatten()
+                probas = np.asarray(s1_output[0]).flatten()
         except Exception as e:
             logger.error(f"Stage 1 batch inference failed: {e}")
             probas = np.zeros(len(grid_data), dtype=np.float32)
 
-        # Stage 2 batch
         intensities = probas.copy()
         if self.stage2_session is not None:
             try:
                 mask = probas > 0.4
                 if mask.any():
                     s2_out = self.stage2_session.run(None, {self._stage2_input_name: X[mask]})
-                    intensities[mask] = np.clip(s2_out[0].flatten(), 0.0, 1.0)
+                    s2_flat = np.asarray(s2_out[0]).flatten()
+                    intensities[mask] = np.clip(s2_flat, 0.0, 1.0)
             except Exception as e:
                 logger.warning(f"Stage 2 batch inference failed: {e}")
 
         results = []
         for i, row in enumerate(grid_data):
-            p = float(probas[i])
+            p = float(np.clip(probas[i], 0.0, 1.0))
             zone_class = ("ABSENT" if p < 0.3 else "LOW" if p < 0.55
                           else "MEDIUM" if p < 0.75 else "HIGH")
             results.append({
@@ -187,22 +223,21 @@ class PFZService:
     def to_geojson(self, grid_predictions: List[Dict[str, Any]], threshold: float = 0.3) -> Dict[str, Any]:
         """
         Converts grid predictions above the threshold to a GeoJSON FeatureCollection.
-        This is what gets stored in Redis for the map endpoint.
         """
         features = []
         for pred in grid_predictions:
-            if pred["presence_probability"] < threshold:
+            if pred.get("presence_probability", 0.0) < threshold:
                 continue
             features.append({
                 "type": "Feature",
                 "geometry": {
                     "type": "Point",
-                    "coordinates": [pred["lon"], pred["lat"]],
+                    "coordinates": [pred.get("lon", 0.0), pred.get("lat", 0.0)],
                 },
                 "properties": {
-                    "presence_probability": pred["presence_probability"],
-                    "intensity_score": pred["intensity_score"],
-                    "zone_class": pred["zone_class"],
+                    "presence_probability": pred.get("presence_probability", 0.0),
+                    "intensity_score": pred.get("intensity_score", 0.0),
+                    "zone_class": pred.get("zone_class", "ABSENT"),
                 },
             })
         return {

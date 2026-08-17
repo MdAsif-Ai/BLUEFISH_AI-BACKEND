@@ -98,14 +98,24 @@ class AnomalyDetectionService:
         if not vessels:
             return []
 
-        X = self._build_feature_matrix(vessels)
+        scores = None
+        if self.scaler is not None and self.iso_forest is not None:
+            try:
+                X_scaled = self.scaler.transform(X)
+                scores = self.iso_forest.score_samples(X_scaled)
+            except Exception as e:
+                logger.warning(f"Isolation Forest batch inference fallback: {e}")
 
-        try:
-            X_scaled = self.scaler.transform(X)
-            scores = self.iso_forest.score_samples(X_scaled)
-        except Exception as e:
-            logger.error(f"Isolation Forest batch inference failed: {e}")
-            return []
+        if scores is None:
+            # Fallback heuristic scoring when ML model artifact is not loaded
+            scores = []
+            for vessel in vessels:
+                flags = _diagnose_anomaly_flags(vessel, -0.2)
+                if flags and flags != ["unclassified_anomaly"]:
+                    scores.append(-0.15 * len(flags))
+                else:
+                    scores.append(0.1)
+            scores = np.array(scores, dtype=np.float32)
 
         anomalies = []
         for i, vessel in enumerate(vessels):

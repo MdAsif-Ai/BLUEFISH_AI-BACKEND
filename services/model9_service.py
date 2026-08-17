@@ -89,6 +89,18 @@ class VesselSegmentationService:
                 "confidence": float (distance to centroid, normalized),
             }
         """
+        if self.model is None:
+            # Fallback heuristic when K-Means model artifact is not loaded
+            cid = _heuristic_segmentation(vessel)
+            return {
+                "mmsi": vessel.get("mmsi", "UNKNOWN"),
+                "cluster_id": cid,
+                "segment": SEGMENT_LABELS.get(cid, f"cluster_{cid}"),
+                "segment_description": _get_segment_description(cid),
+                "confidence": 0.85,
+                "degraded": True,
+            }
+
         X = self._build_feature_vector(vessel).reshape(1, -1)
         try:
             cluster_id = int(self.model.predict(X)[0])
@@ -108,12 +120,14 @@ class VesselSegmentationService:
             }
         except Exception as e:
             logger.error(f"K-Means segmentation failed: {e}")
+            cid = _heuristic_segmentation(vessel)
             return {
                 "mmsi": vessel.get("mmsi", "UNKNOWN"),
-                "cluster_id": -1,
-                "segment": "unknown",
-                "segment_description": "Segmentation unavailable",
-                "confidence": 0.0,
+                "cluster_id": cid,
+                "segment": SEGMENT_LABELS.get(cid, f"cluster_{cid}"),
+                "segment_description": _get_segment_description(cid),
+                "confidence": 0.5,
+                "degraded": True,
             }
 
     def predict_batch(self, vessels: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -121,17 +135,36 @@ class VesselSegmentationService:
         Batch segmentation for a list of vessels.
         Uses numpy batch predict for efficiency.
         """
-        if not vessels:
-            return []
+        if self.model is None:
+            results = []
+            for vessel in vessels:
+                cid = _heuristic_segmentation(vessel)
+                results.append({
+                    "mmsi": vessel.get("mmsi", "UNKNOWN"),
+                    "cluster_id": cid,
+                    "segment": SEGMENT_LABELS.get(cid, f"cluster_{cid}"),
+                    "segment_description": _get_segment_description(cid),
+                    "degraded": True,
+                })
+            return results
 
         X = np.array([self._build_feature_vector(v) for v in vessels], dtype=np.float32)
 
         try:
             cluster_ids = self.model.predict(X)
         except Exception as e:
-            logger.error(f"K-Means batch prediction failed: {e}")
-            return [{"mmsi": v.get("mmsi", "UNKNOWN"), "cluster_id": -1,
-                     "segment": "unknown"} for v in vessels]
+            logger.warning(f"K-Means batch prediction fallback: {e}")
+            results = []
+            for vessel in vessels:
+                cid = _heuristic_segmentation(vessel)
+                results.append({
+                    "mmsi": vessel.get("mmsi", "UNKNOWN"),
+                    "cluster_id": cid,
+                    "segment": SEGMENT_LABELS.get(cid, f"cluster_{cid}"),
+                    "segment_description": _get_segment_description(cid),
+                    "degraded": True,
+                })
+            return results
 
         results = []
         for i, vessel in enumerate(vessels):
@@ -163,6 +196,25 @@ class VesselSegmentationService:
             seg: {"count": cnt, "percentage": round(cnt / total * 100, 1)}
             for seg, cnt in counts.items()
         }
+
+
+def _heuristic_segmentation(vessel: Dict[str, Any]) -> int:
+    """Rules-based fallback archetype classifier when K-Means model is uninstantiated."""
+    dist = float(vessel.get("max_distance_from_port_km", vessel.get("avg_daily_distance_km", 0.0)))
+    duration = float(vessel.get("avg_trip_duration_hours", 0.0))
+    fuel = float(vessel.get("avg_fuel_per_trip_liters", 0.0))
+
+    if dist > 150 or duration > 72 or fuel > 600:
+        return 1  # deep_sea_trawler
+    elif dist > 80 or duration > 36:
+        return 5  # offshore_longliner
+    elif float(vessel.get("night_fishing_ratio", 0.0)) > 0.5:
+        return 3  # opportunistic
+    elif float(vessel.get("monsoon_activity_ratio", 0.0)) > 0.4:
+        return 2  # seasonal_migrator
+    elif duration < 12 and dist < 30:
+        return 4  # artisanal_inshore
+    return 0  # coastal_gillnetter
 
 
 def _get_segment_description(cluster_id: int) -> str:
