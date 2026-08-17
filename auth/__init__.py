@@ -1,0 +1,1 @@
+"""BlueFish AI — Auth Package"""

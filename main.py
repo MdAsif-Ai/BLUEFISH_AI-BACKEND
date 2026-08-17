@@ -37,12 +37,15 @@ from fastapi.responses import JSONResponse
 
 # ── Add MODELS and AGENTS to Python path ─────────────────────────────────────
 _base = Path(__file__).parent
-sys.path.insert(0, str(_base.parent / "MODELS" / "model2"))
-sys.path.insert(0, str(_base.parent / "MODELS" / "model5"))
-sys.path.insert(0, str(_base.parent / "MODELS" / "model7"))
-sys.path.insert(0, str(_base.parent / "MODELS" / "model8"))
-sys.path.insert(0, str(_base.parent / "MODELS" / "model10"))
-sys.path.insert(0, str(_base.parent / "AGENTS"))
+# MODELS/ and AGENTS/ live inside the backend root (BLUEFISH_AI-BACKEND/)
+_models = _base / "MODELS"
+_agents = _base / "AGENTS"
+sys.path.insert(0, str(_models / "model2"))
+sys.path.insert(0, str(_models / "model5"))
+sys.path.insert(0, str(_models / "model7"))
+sys.path.insert(0, str(_models / "model8"))
+sys.path.insert(0, str(_models / "model10"))
+sys.path.insert(0, str(_agents))
 
 # ── Configure logging ─────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -230,7 +233,7 @@ async def health_check():
 # ── Include API Routers (v2.0 — Role-Based Architecture) ──────────────────────
 
 # ── v2.0 Role-Based Routers (NEW) ────────────────────────────────────────────
-from api.routes_auth import router as auth_router
+from auth.routes import router as auth_router          # bulletproof auth module (auth/)
 from api.routes_mobile import router as mobile_router
 from api.routes_command import router as command_router
 from api.routes_intel import router as intel_router
