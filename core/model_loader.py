@@ -27,10 +27,14 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger("bluefish.model_loader")
 
 # ── Add MODELS directory to path so model*.py scripts can be imported ─────────
-MODELS_BASE_DIR = Path(__file__).parent.parent.parent / "MODELS"
-for model_dir in MODELS_BASE_DIR.iterdir():
-    if model_dir.is_dir():
-        sys.path.insert(0, str(model_dir))
+# MODELS/ lives inside BLUEFISH_AI-BACKEND/, so it's two levels up from core/
+MODELS_BASE_DIR = Path(__file__).parent.parent / "MODELS"
+if MODELS_BASE_DIR.exists():
+    for model_dir in MODELS_BASE_DIR.iterdir():
+        if model_dir.is_dir():
+            sys.path.insert(0, str(model_dir))
+else:
+    logger.warning(f"MODELS directory not found at {MODELS_BASE_DIR}. Model imports may fail.")
 
 TMP_DIR = Path(__file__).parent.parent / "tmp"
 TMP_DIR.mkdir(exist_ok=True)

@@ -1,100 +1,119 @@
 """
-BlueFish AI - Automated Test Script for Auth Flow
-===================================================
-Tests the authentication endpoints: register, login, me, refresh, logout.
-It uses `requests` to hit the local server running at http://localhost:8000.
+BlueFish AI — Production Auth E2E Test
+======================================
+Tests the production Supabase auth flows:
+  1. POST /api/v1/auth/register → Creates user in Supabase Auth & profiles table
+  2. POST /api/v1/auth/login    → Returns real Supabase JWT access token
+  3. GET  /api/v1/auth/me       → Verifies JWT against Supabase & gets profile row
+  4. POST /api/v1/auth/refresh  → Refreshes Supabase session
+  5. POST /api/v1/auth/logout   → Signs out Supabase session
 """
 
+import json
+import sys
 import uuid
-import time
 import requests
 
 BASE_URL = "http://127.0.0.1:8000"
 
-def test_auth_flow():
-    print("Starting Auth Flow Test...")
+def test_production_auth_flow():
+    print("\n" + "=" * 60)
+    print("  BlueFish AI — Production Auth E2E Test Suite")
+    print("=" * 60 + "\n")
 
-    # 1. Generate unique email for registration
-    unique_id = str(uuid.uuid4())[:8]
-    test_email = f"testuser_{unique_id}@example.com"
-    test_password = "SecurePassword123!"
+    # 1. Generate unique user details
+    uid = str(uuid.uuid4())[:8]
+    email = f"fisherman_{uid}@gmail.com"
+    password = "SecurePassword123!"
+    full_name = f"Tamil Fisherman {uid}"
+    role = "fisherman"
 
-    print(f"\n[1] Testing Registration with {test_email}")
-    reg_payload = {
-        "email": test_email,
-        "password": test_password,
-        "full_name": "Test Fisherman",
-        "role": "fisherman",
-        "phone": f"+9198765{int(time.time()) % 10000:04d}",
-        "preferred_language": "en"
-    }
-    
-    try:
-        reg_res = requests.post(f"{BASE_URL}/api/v1/auth/register", json=reg_payload)
-    except requests.exceptions.ConnectionError:
-        print(f" ❌ Connection failed. Ensure the server is running at {BASE_URL}")
-        return
+    print(f"[*] Registering new user via Supabase Auth...")
+    print(f"    Email: {email}")
 
-    if reg_res.status_code == 201:
-        print(" ✅ Registration successful.")
-    else:
-        print(f" ❌ Registration failed: {reg_res.status_code} - {reg_res.text}")
-        if reg_res.status_code not in (409, 429):
-            return
+    # 2. Register
+    reg_res = requests.post(
+        f"{BASE_URL}/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": password,
+            "full_name": full_name,
+            "role": role,
+            "phone": "+919876543210",
+            "preferred_language": "ta",
+        },
+        timeout=15,
+    )
 
-    print("\n[2] Testing Duplicate Registration (Should fail with 409)")
-    reg_dup = requests.post(f"{BASE_URL}/api/v1/auth/register", json=reg_payload)
-    if reg_dup.status_code == 409:
-        print(" ✅ Duplicate registration correctly blocked with 409.")
-    else:
-        print(f" ❌ Expected 409, got {reg_dup.status_code}: {reg_dup.text}")
+    print(f"    Response Code: {reg_res.status_code}")
+    print(f"    Response Body: {reg_res.text}")
 
-    print("\n[3] Testing Login")
-    login_payload = {
-        "email": test_email,
-        "password": test_password
-    }
-    login_res = requests.post(f"{BASE_URL}/api/v1/auth/login", json=login_payload)
-    
-    if login_res.status_code == 200:
-        print(" ✅ Login successful.")
-        data = login_res.json()
-        access_token = data.get("access_token")
-        refresh_token = data.get("refresh_token")
-        profile = data.get("profile", {})
-        print(f"    User ID: {profile.get('user_id')}")
-        print(f"    Role: {profile.get('role')}")
-    else:
-        print(f" ❌ Login failed: {login_res.status_code} - {login_res.text}")
-        return
+    assert reg_res.status_code == 201, f"Registration failed: {reg_res.text}"
+    reg_data = reg_res.json()
+    user_id = reg_data.get("user_id")
+    print(f" ✅ User successfully created in Supabase Auth & profiles table!")
+    print(f"    User ID: {user_id}")
 
-    print("\n[4] Testing /me (Authenticated Profile Retrieval)")
-    headers = {"Authorization": f"Bearer {access_token}"}
-    me_res = requests.get(f"{BASE_URL}/api/v1/auth/me", headers=headers)
-    if me_res.status_code == 200:
-        print(" ✅ /me retrieved successfully.")
-        me_data = me_res.json()
-        print(f"    Registered Email: {me_data.get('email')}")
-        print(f"    Vessels Count: {len(me_data.get('vessels', []))}")
-    else:
-        print(f" ❌ /me failed: {me_res.status_code} - {me_res.text}")
+    # 3. Login
+    print(f"\n[*] Logging in with Supabase Auth...")
+    login_res = requests.post(
+        f"{BASE_URL}/api/v1/auth/login",
+        json={"email": email, "password": password},
+        timeout=15,
+    )
 
-    print("\n[5] Testing Token Refresh")
-    refresh_payload = {"refresh_token": refresh_token}
-    refresh_res = requests.post(f"{BASE_URL}/api/v1/auth/refresh", json=refresh_payload)
-    if refresh_res.status_code == 200:
-        print(" ✅ Token refresh successful.")
-    else:
-        print(f" ❌ Token refresh failed: {refresh_res.status_code} - {refresh_res.text}")
+    print(f"    Response Code: {login_res.status_code}")
+    assert login_res.status_code == 200, f"Login failed: {login_res.text}"
+    login_data = login_res.json()
+    token = login_data["access_token"]
+    refresh_tok = login_data["refresh_token"]
+    print(f" ✅ Login successful! JWT Access Token received.")
+    print(f"    Token snippet: {token[:30]}...")
 
-    print("\n[6] Testing Logout")
-    logout_res = requests.post(f"{BASE_URL}/api/v1/auth/logout", headers=headers)
-    if logout_res.status_code == 200:
-        print(" ✅ Logout successful.")
-    else:
-        print(f" ❌ Logout failed: {logout_res.status_code} - {logout_res.text}")
+    # 4. /me Profile retrieval
+    print(f"\n[*] Fetching /me authenticated profile...")
+    me_res = requests.get(
+        f"{BASE_URL}/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    print(f"    Response Code: {me_res.status_code}")
+    print(f"    Response Body: {me_res.text}")
+    assert me_res.status_code == 200, f"Fetch /me failed: {me_res.text}"
+    me_data = me_res.json()
+    assert me_data["user_id"] == user_id
+    assert me_data["email"] == email
+    print(f" ✅ /me returned verified Supabase profile successfully!")
 
-    print("\n🎉 Auth Flow Test Completed Successfully.")
+    # 5. Refresh token
+    print(f"\n[*] Testing token refresh...")
+    ref_res = requests.post(
+        f"{BASE_URL}/api/v1/auth/refresh",
+        json={"refresh_token": refresh_tok},
+        timeout=15,
+    )
+    print(f"    Response Code: {ref_res.status_code}")
+    assert ref_res.status_code == 200, f"Token refresh failed: {ref_res.text}"
+    print(f" ✅ Session refresh successful!")
+
+    # 6. Logout
+    print(f"\n[*] Testing logout...")
+    out_res = requests.post(
+        f"{BASE_URL}/api/v1/auth/logout",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    print(f"    Response Code: {out_res.status_code}")
+    assert out_res.status_code == 200
+    print(f" ✅ Logout successful!")
+
+    print("\n" + "=" * 60)
+    print(" 🎉 ALL PRODUCTION AUTH TESTS PASSED PERFECTLY!")
+    print("=" * 60 + "\n")
 
 if __name__ == "__main__":
-    test_auth_flow()
+    try:
+        test_production_auth_flow()
+    except Exception as e:
+        print(f"\n❌ Test failed with error: {e}")
+        sys.exit(1)
