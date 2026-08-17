@@ -98,6 +98,7 @@ class AnomalyDetectionService:
         if not vessels:
             return []
 
+        X = self._build_feature_matrix(vessels)
         scores = None
         if self.scaler is not None and self.iso_forest is not None:
             try:
