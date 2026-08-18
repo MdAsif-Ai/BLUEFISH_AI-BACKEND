@@ -289,3 +289,34 @@ async def search_marine_locations(
             "results": [],
             "error": str(e)
         }
+
+
+@router.get("/live-model-predictions", summary="Execute All 11 AI Models with Live 97 Telemetry Vector")
+async def get_all_live_model_predictions(
+    latitude: float = Query(default=13.1167, ge=-90.0, le=90.0, description="Latitude of target location"),
+    longitude: float = Query(default=80.2833, ge=-180.0, le=180.0, description="Longitude of target location"),
+    location_name: Optional[str] = Query(default=None, description="Optional name of marine location"),
+):
+    """
+    1. Fetches real live weather & marine data (Open-Meteo) + 97 synthesized live telemetry vector for any location.
+    2. Feeds the 97 live telemetry vector directly into ALL 11 AI models.
+    3. Returns unified predictions from Model 1 through Model 11 in a single response payload.
+    """
+    try:
+        from services.live_data_service import LiveDataService
+        from services.master_pipeline_service import MasterModelPipelineService
+        
+        live_svc = LiveDataService()
+        live_data = await live_svc.get_live_data(latitude=latitude, longitude=longitude, location_name=location_name)
+        
+        pipeline = MasterModelPipelineService()
+        predictions = pipeline.run_all_models(live_data)
+        return predictions
+    except Exception as e:
+        logger.error(f"Error executing live model predictions pipeline: {e}")
+        return {
+            "error": str(e),
+            "location": {"name": location_name or "Target Coordinates", "latitude": latitude, "longitude": longitude},
+            "model_predictions": {}
+        }
+
