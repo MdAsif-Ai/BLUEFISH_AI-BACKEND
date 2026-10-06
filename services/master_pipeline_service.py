@@ -247,11 +247,16 @@ class MasterModelPipelineService:
             "location": location,
             "live_telemetry_summary": {
                 "sst_celsius": sst,
+                "air_temp_celsius": weather.get("air_temperature"),
+                "humidity_percent": weather.get("humidity"),
+                "surface_pressure_hpa": weather.get("surface_pressure"),
                 "wind_speed_kmh": weather.get("wind_speed"),
+                "wind_direction_deg": weather.get("wind_direction"),
                 "wave_height_m": wave_height,
                 "current_speed_ms": current_speed,
                 "current_direction_deg": current_dir,
                 "chlorophyll_mg_m3": chl,
+                "salinity_psu": feat97.get("salinity", 35.0),
                 "updated_at": live_data.get("metadata", {}).get("updated_at")
             },
             "model_predictions": predictions

@@ -241,6 +241,7 @@ from api.routes_command import router as command_router
 from api.routes_intel import router as intel_router
 from api.routes_twin import router as twin_router
 from api.routes_mlops import router as mlops_router
+from api.routes_registry import router as registry_router
 
 app.include_router(auth_router)     # Public — register, login, /me
 app.include_router(mobile_router)   # Fisherman App — any authenticated user
@@ -248,6 +249,7 @@ app.include_router(command_router)  # Government — Live Dashboard
 app.include_router(intel_router)    # Government — AI Predictions
 app.include_router(twin_router)     # Government — Digital Twin (Celery)
 app.include_router(mlops_router)    # Government — MLOps Pipelines
+app.include_router(registry_router) # Government & Public — Real Fishermen, Catches, Admins, Vessels
 
 # ── v1.0 Legacy Routers (kept for backward compatibility) ─────────────────────
 from api.routes_map import router as map_router
