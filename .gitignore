@@ -19,4 +19,8 @@ tmp/
 # OS junk
 .DS_Store
 Thumbs.db
-.env/
+# Environment variables
+.env
+.env.*
+.env.backup
+!.env.example
