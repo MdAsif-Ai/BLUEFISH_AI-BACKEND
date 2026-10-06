@@ -1,8 +1,7 @@
 # Python & Virtual Environment
 .venv/
 venv/
-ENV/
-env/
+
 __pycache__/
 *.pyc
 *.pyo
@@ -20,3 +19,4 @@ tmp/
 # OS junk
 .DS_Store
 Thumbs.db
+.env/
