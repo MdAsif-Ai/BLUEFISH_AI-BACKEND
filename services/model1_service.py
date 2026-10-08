@@ -186,6 +186,8 @@ class PFZService:
                 raw_prob = s1_output[1]
                 if isinstance(raw_prob, np.ndarray) and raw_prob.ndim == 2 and raw_prob.shape[1] > 1:
                     probas = raw_prob[:, 1]
+                elif isinstance(raw_prob, list) and len(raw_prob) > 0 and isinstance(raw_prob[0], dict):
+                    probas = np.array([float(r.get(1, list(r.values())[-1])) for r in raw_prob], dtype=np.float32)
                 else:
                     probas = np.asarray(s1_output[0]).flatten()
             else:

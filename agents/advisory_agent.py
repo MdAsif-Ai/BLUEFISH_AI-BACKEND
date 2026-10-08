@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 # ── Import existing agent code from AGENTS/ directory ────────────────────────
-_agents_dir = Path(__file__).parent.parent.parent / "AGENTS"
+_agents_dir = Path(__file__).parent.parent / "AGENTS"
 sys.path.insert(0, str(_agents_dir))
 
 from agent_1 import (  # noqa: E402

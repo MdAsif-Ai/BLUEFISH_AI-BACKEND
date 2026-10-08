@@ -126,6 +126,12 @@ async def load_all_models(supabase_client: Any, bucket: str = "ml-models") -> Mo
     try:
         stage1_path = TMP_DIR / "stage1_presence.onnx"
         stage2_path = TMP_DIR / "stage2_intensity.onnx"
+        # Local fallback from MODELS repository if available
+        if not stage1_path.exists() and (MODELS_BASE_DIR / "model1" / "stage1_presence.onnx").exists():
+            import shutil
+            shutil.copy(MODELS_BASE_DIR / "model1" / "stage1_presence.onnx", stage1_path)
+            shutil.copy(MODELS_BASE_DIR / "model1" / "stage2_intensity.onnx", stage2_path)
+
         ok1 = _download_from_supabase(supabase_client, bucket, "model1/stage1_presence.onnx", stage1_path)
         ok2 = _download_from_supabase(supabase_client, bucket, "model1/stage2_intensity.onnx", stage2_path)
 
